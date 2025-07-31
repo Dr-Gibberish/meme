@@ -100,22 +100,22 @@ Explanation: [Describe the core emotional trigger and why this intensity fits]"
 3. IMAGE GENERATION INSTRUCTIONS:
 
 OPTION A - CARTOON STYLE:
-"Create a cartoon image using [specific popular US cartoon character like SpongeBob, Tom and Jerry, Bugs Bunny, Homer Simpson, etc.] doing [specific action] with [facial expression]. The character should be in [specific pose/situation]. Background: [setting description]. Style: [maintain original character's art style]. Mood: [lighting/color scheme that enhances the emotion]."
+"Create a cartoon image using [specific popular US cartoon character like SpongeBob, Tom and Jerry, Bugs Bunny, Homer Simpson, etc.] in [specific pose/action] with [facial expression]. The character should be [specific position/gesture]. Background: [setting description]. Style: [maintain original character's art style]. Mood: [lighting/color scheme that enhances the emotion]. DO NOT include any speech bubbles, text, or dialogue in the image."
 
 OPTION B - PHOTOREALISTIC STYLE:
-"Create a photo of [specific person type] in [specific pose/action] showing [expression]. Setting: [detailed environment]. The person should appear [age/appearance]. Camera angle: [perspective]. Lighting: [mood/atmosphere]."
+"Create a photo of [specific person type] in [specific pose/action] showing [expression]. Setting: [detailed environment]. The person should appear [age/appearance]. Camera angle: [perspective]. Lighting: [mood/atmosphere]. DO NOT include any text, signs, or speech elements in the image."
 
 4. US MEME CAPTION:
-"[Write an original English caption that would resonate with US internet culture, using appropriate slang, references, or humor patterns that Americans use for this type of emotion/situation. Use ONLY plain text - NO emojis, symbols, or special characters. Keep it conversational and meme-appropriate.]"
+[Write only the caption text here - no quotation marks, no explanations, no hashtags, no emojis, no additional commentary. Just the pure text that will be overlaid on the image.]
 
 CONSTRAINTS:
 - Primary emotion: joy, anger, sadness, fear, or disgust only
 - Intensity: low or high only  
 - Be creative - don't translate, create NEW content for US culture
 - Image instructions must be specific enough for an image generator
-- Caption should feel natural to US meme culture
-- For cartoon option, use recognizable US characters that fit the emotion
-- IMPORTANT: Caption must be pure text only - absolutely NO emojis, hashtags, or special symbols"""
+- Image instructions must NOT include any dialogue, speech, or text elements
+- Caption must be pure text only - absolutely NO emojis, hashtags, quotation marks, or explanations
+- Caption section must contain ONLY the text to be overlaid - nothing else"""
     
     def _load_model(self):
         """Load the LLaVA model with optimized settings matching your deployment"""
@@ -211,6 +211,71 @@ CONSTRAINTS:
                 logger.error("3. Internet connection for fallback")
                 sys.exit(1)
     
+    def _validate_output_format(self, translation: str, filename: str) -> Tuple[bool, str]:
+        """Validate that the model output has correct format and clean sections"""
+        
+        # Check for required sections
+        required_sections = [
+            "1. EMOTION ANALYSIS:",
+            "2. CULTURAL ESSENCE:",
+            "3. IMAGE GENERATION INSTRUCTIONS:",
+            "4. US MEME CAPTION:"
+        ]
+        
+        missing_sections = []
+        for section in required_sections:
+            if section not in translation:
+                missing_sections.append(section)
+        
+        if missing_sections:
+            return False, f"Missing sections: {missing_sections}"
+        
+        # Extract caption section
+        try:
+            caption_part = translation.split("4. US MEME CAPTION:")[-1].strip()
+            
+            # Check for corrupted caption (mixed with image instructions)
+            corruption_indicators = [
+                "Create a cartoon image",
+                "Create a photo of",
+                "Background:",
+                "Style:",
+                "Mood:",
+                "Camera angle:",
+                "Lighting:",
+                "DO NOT include"
+            ]
+            
+            has_corruption = any(indicator in caption_part for indicator in corruption_indicators)
+            if has_corruption:
+                return False, "Caption section contains image generation instructions"
+            
+            # Check for repetitive text (like "moodsky" repetition)
+            words = caption_part.lower().split()
+            if len(words) > 5:
+                # Check if more than 30% of words are repetitive
+                word_counts = {}
+                for word in words:
+                    word_counts[word] = word_counts.get(word, 0) + 1
+                
+                max_repetition = max(word_counts.values()) if word_counts else 0
+                if max_repetition > len(words) * 0.3:
+                    return False, "Caption contains repetitive/corrupted text"
+            
+            # Check caption length (too short or too long)
+            if len(caption_part.strip()) < 3:
+                return False, "Caption too short or empty"
+            
+            # Check word count for meme suitability (12 words max)
+            word_count = len(caption_part.strip().split())
+            if word_count > 15:
+                return False, f"Caption too long ({word_count} words, max 12 recommended for memes)"
+                
+        except Exception as e:
+            return False, f"Failed to parse caption section: {str(e)}"
+        
+        return True, ""
+
     def translate_meme(self, image_path: str, content: str, emotion: str, intensity: str) -> str:
         """Translate a single meme using the model"""
         try:
@@ -222,7 +287,9 @@ CONSTRAINTS:
 Image: [PROVIDED]
 Description: {content}
 Original Emotion: {emotion}
-Original Intensity: {intensity}"""
+Original Intensity: {intensity}
+
+Please follow the exact format with numbered sections and provide a clean caption in section 4."""
             
             # Prepare inputs
             conversation = [
@@ -248,6 +315,7 @@ Original Intensity: {intensity}"""
                     do_sample=True,
                     temperature=0.7,
                     top_p=0.9,  # Added for better quality
+                    repetition_penalty=1.1,  # Added to reduce repetitive text
                     pad_token_id=self.processor.tokenizer.eos_token_id
                 )
             
@@ -264,6 +332,13 @@ Original Intensity: {intensity}"""
                     generated_text = response.replace(prompt_text, "").strip()
                 else:  
                     generated_text = response.strip()
+            
+            # Validate output format
+            is_valid, error_msg = self._validate_output_format(generated_text, image_path)
+            if not is_valid:
+                logger.warning(f"Output validation failed for {image_path}: {error_msg}")
+                # Still return the output but log the issue
+                return f"WARNING - Format issue ({error_msg}):\n\n{generated_text}"
             
             return generated_text
             
@@ -512,7 +587,10 @@ class MemeTestSuite:
             f.write("- Detailed image generation instructions\n")
             f.write("- Original US meme caption creation\n")
             f.write("- Added validation for image-description pairs\n")
-            f.write("- Enforced pure-text captions (no emojis) for text overlay API\n\n")
+            f.write("- Enforced pure-text captions (no emojis/hashtags) for text overlay API\n")
+            f.write("- Removed speech/dialogue from image generation instructions\n")
+            f.write("- Added output format validation to prevent section mixing\n")
+            f.write("- Limited caption length to 12 words max for optimal meme readability\n\n")
             
             if processed_results:
                 f.write("EMOTION DISTRIBUTION (Processed Samples):\n")
@@ -638,34 +716,83 @@ def main():
             logger.info(f"File: {first_result['filename']}")
             logger.info(f"Original Emotion: {first_result['original_emotion']}")
             if any(char in first_result['translation'] for char in ["SpongeBob", "Homer", "Bugs Bunny", "Tom and Jerry"]):
-                logger.info("GOOD: Using specific cartoon characters")
+                logger.info("✅ GOOD: Using specific cartoon characters")
             else:
-                logger.info("May need adjustment: No specific cartoon characters detected")
+                logger.info("⚠️  May need adjustment: No specific cartoon characters detected")
             
             if "Create a cartoon image using" in first_result['translation']:
-                logger.info("GOOD: Following image generation format")
+                logger.info("✅ GOOD: Following image generation format")
             else:
-                logger.info("May need adjustment: Image generation format unclear")
+                logger.info("⚠️  May need adjustment: Image generation format unclear")
             
-            # Check for emoji-free captions
+            # Check for emoji-free captions and proper format
             import re
-            caption_section = first_result['translation'].split('4. US MEME CAPTION:')[-1] if '4. US MEME CAPTION:' in first_result['translation'] else ""
-            emoji_pattern = re.compile("["
-                u"\U0001F600-\U0001F64F"  # emoticons
-                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                u"\U0001F680-\U0001F6FF"  # transport & map
-                u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                u"\U00002702-\U000027B0"
-                u"\U000024C2-\U0001F251"
-                u"\U0001F900-\U0001F9FF"  # supplemental symbols
-                "]+", flags=re.UNICODE)
             
-            if emoji_pattern.search(caption_section):
-                logger.info("Caption contains emojis - may need text overlay adjustment")
+            # Extract just the caption part after "4. US MEME CAPTION:"
+            if '4. US MEME CAPTION:' in first_result['translation']:
+                caption_full = first_result['translation'].split('4. US MEME CAPTION:')[-1].strip()
+                # Remove any quotation marks or extra formatting
+                caption_clean = caption_full.strip('"').strip("'").strip()
+                
+                # Check for format corruption
+                corruption_indicators = [
+                    "Create a cartoon image",
+                    "Create a photo of", 
+                    "Background:",
+                    "moodsky",
+                    "color/color"
+                ]
+                
+                has_corruption = any(indicator in caption_clean for indicator in corruption_indicators)
+                
+                if has_corruption:
+                    logger.info("❌ Caption section contains image generation instructions")
+                else:
+                    # Check for emojis
+                    emoji_pattern = re.compile("["
+                        u"\U0001F600-\U0001F64F"  # emoticons
+                        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+                        u"\U0001F680-\U0001F6FF"  # transport & map
+                        u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+                        u"\U00002702-\U000027B0"
+                        u"\U000024C2-\U0001F251"
+                        u"\U0001F900-\U0001F9FF"  # supplemental symbols
+                        "]+", flags=re.UNICODE)
+                    
+                    # Check for hashtags
+                    has_hashtags = '#' in caption_clean
+                    
+                    if emoji_pattern.search(caption_clean):
+                        logger.info("⚠️  Caption contains emojis - needs cleaning for text overlay")
+                    elif has_hashtags:
+                        logger.info("⚠️  Caption contains hashtags - needs cleaning for text overlay")
+                    else:
+                        logger.info("✅ GOOD: Pure text caption (no emojis/hashtags)")
+                    
+                    # Check caption length
+                    word_count = len(caption_clean.split())
+                    if len(caption_clean) < 3:
+                        logger.info("⚠️  Caption too short")
+                    elif word_count > 12:
+                        logger.info(f"⚠️  Caption too long ({word_count} words, recommended max 12 for memes)")
+                    else:
+                        logger.info(f"✅ GOOD: Caption length appropriate ({word_count} words)")
+                        
+                    logger.info(f"Caption preview: '{caption_clean[:60]}...'")
+                
+                # Check for speech patterns in image instructions
+                has_speech_in_image = any(phrase in first_result['translation'] for phrase in [
+                    'saying', 'says', 'talking', 'speaking', 'dialogue', 'speech bubble'
+                ])
+                
+                if has_speech_in_image:
+                    logger.info("⚠️  Image instructions contain speech elements - may confuse generator")
+                else:
+                    logger.info("✅ GOOD: Image instructions are speech-free")
             else:
-                logger.info("GOOD: Pure text caption (no emojis)")
+                logger.info("⚠️  No caption section found in output")
         else:
-            logger.warning("No successful results to analyze")
+            logger.warning("❌ No successful results to analyze")
         
     except KeyboardInterrupt:
         logger.info("Test interrupted by user")
